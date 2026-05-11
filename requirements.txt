@@ -1,0 +1,6 @@
+aiogram==3.7.0
+requests
+beautifulsoup4
+apscheduler
+environs
+tortoise-orm
