@@ -3,8 +3,8 @@ from datetime import datetime
 from typing import Optional, List
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
-from models.user import User
-from models.schedule import Schedule
+from models.user import get_or_create_user
+from models.schedule import Schedule, get_cached_schedules, delete_cached_schedules, create_schedule
 from utils.i18n import get_text
 from keyboards.inline.menu import (
     get_schedule_menu_keyboard,
@@ -13,8 +13,6 @@ from keyboards.inline.menu import (
 )
 from services.schedule_service import (
     get_cached_week_id,
-    get_prev_week_id,
-    get_next_week_id,
     format_week_date_range,
     update_cached_week_id,
 )
@@ -24,8 +22,6 @@ from services.hemis_service import (
     create_session,
     fetch_schedule,
     check_login_status,
-    get_current_week_id,
-    get_student_group,
 )
 from services.session_store import user_sessions
 from states.user_state import UserState
@@ -89,13 +85,13 @@ def _format_schedule_text(schedules: list, week_id: str = None, language: str = 
     return text
 
 
-async def _ensure_user(tid: int) -> User:
-    user, _ = await User.get_or_create(telegram_id=tid)
+async def _ensure_user(tid: int):
+    user, _ = await get_or_create_user(tid)
     return user
 
 
-async def _get_cached_schedule(user: User, week_id: str) -> Optional[List[dict]]:
-    schedules = await Schedule.filter(user=user, week_id=week_id).order_by("pair_number")
+async def _get_cached_schedule(tid: int, week_id: str) -> Optional[List[dict]]:
+    schedules = await get_cached_schedules(tid, week_id)
     if not schedules:
         return None
     if (datetime.now() - schedules[0].cached_at).total_seconds() > CACHE_TTL_SECONDS:
@@ -103,22 +99,12 @@ async def _get_cached_schedule(user: User, week_id: str) -> Optional[List[dict]]
     return [_schedule_to_dict(s) for s in schedules]
 
 
-async def _cache_schedule(user: User, week_id: str, schedules_data: list):
-    await Schedule.filter(user=user, week_id=week_id).delete()
+async def _cache_schedule(tid: int, week_id: str, schedules_data: list):
+    await delete_cached_schedules(tid, week_id)
     if not schedules_data:
         return
     for s in schedules_data:
-        await Schedule.create(
-            user=user,
-            week_id=week_id,
-            day=s.get("day", ""),
-            pair_number=s.get("pair_number", 0),
-            subject=s.get("subject", ""),
-            teacher=s.get("teacher", ""),
-            room=s.get("room", ""),
-            lesson_type=s.get("lesson_type", ""),
-            lesson_time=s.get("lesson_time", ""),
-        )
+        await create_schedule(tid, week_id, s)
 
 
 async def _start_captcha_flow(
@@ -188,7 +174,7 @@ async def show_today_schedule(call: types.CallbackQuery, state: FSMContext):
 
     week_id = get_cached_week_id()
 
-    cached = await _get_cached_schedule(user, week_id)
+    cached = await _get_cached_schedule(tid, week_id)
     if cached is not None:
         text = _format_schedule_text(cached, week_id=None, language=user.language)
         await call.message.edit_text(text, reply_markup=get_schedule_menu_keyboard(user.language))
@@ -206,7 +192,7 @@ async def show_today_schedule(call: types.CallbackQuery, state: FSMContext):
             return
 
     schedules_data = fetch_schedule(session, week_id)
-    await _cache_schedule(user, week_id, schedules_data)
+    await _cache_schedule(tid, week_id, schedules_data)
 
     text = _format_schedule_text(schedules_data, week_id=None, language=user.language)
     await call.message.edit_text(text, reply_markup=get_schedule_menu_keyboard(user.language))
@@ -229,7 +215,7 @@ async def show_week_schedule(call: types.CallbackQuery, state: FSMContext):
 
     week_id = get_cached_week_id()
 
-    cached = await _get_cached_schedule(user, week_id)
+    cached = await _get_cached_schedule(tid, week_id)
     if cached is not None:
         await state.update_data(selected_week_id=week_id)
         text = _format_schedule_text(cached, week_id=week_id, language=user.language)
@@ -248,7 +234,7 @@ async def show_week_schedule(call: types.CallbackQuery, state: FSMContext):
             return
 
     schedules_data = fetch_schedule(session, week_id)
-    await _cache_schedule(user, week_id, schedules_data)
+    await _cache_schedule(tid, week_id, schedules_data)
 
     await state.update_data(selected_week_id=week_id)
     text = _format_schedule_text(schedules_data, week_id=week_id, language=user.language)
@@ -265,7 +251,7 @@ async def select_week(call: types.CallbackQuery, state: FSMContext):
 
     await call.message.edit_text(get_text("schedule_loading", user.language))
 
-    cached = await _get_cached_schedule(user, week_id)
+    cached = await _get_cached_schedule(tid, week_id)
     if cached is not None:
         await state.update_data(selected_week_id=week_id)
         text = _format_schedule_text(cached, week_id=week_id, language=user.language)
@@ -285,7 +271,7 @@ async def select_week(call: types.CallbackQuery, state: FSMContext):
             return
 
     schedules_data = fetch_schedule(session, week_id)
-    await _cache_schedule(user, week_id, schedules_data)
+    await _cache_schedule(tid, week_id, schedules_data)
 
     await state.update_data(selected_week_id=week_id)
     text = _format_schedule_text(schedules_data, week_id=week_id, language=user.language)
@@ -310,7 +296,7 @@ async def update_schedule(call: types.CallbackQuery, state: FSMContext):
             return
 
     schedules_data = fetch_schedule(session, week_id)
-    await _cache_schedule(user, week_id, schedules_data)
+    await _cache_schedule(tid, week_id, schedules_data)
 
     await state.update_data(selected_week_id=week_id)
     text = _format_schedule_text(schedules_data, week_id=week_id, language=user.language)
@@ -361,7 +347,7 @@ async def process_schedule_captcha(message: types.Message, state: FSMContext):
         week_id = get_cached_week_id()
 
     schedules_data = fetch_schedule(session, week_id)
-    await _cache_schedule(user, week_id, schedules_data)
+    await _cache_schedule(tid, week_id, schedules_data)
 
     await wait_msg.delete()
     await state.clear()

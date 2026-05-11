@@ -2,12 +2,18 @@ import logging
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from models.user import User
-from models.schedule import Schedule
+from models.user import (
+    count_users,
+    count_connected_users,
+    count_reminder_users,
+    get_all_users,
+    get_all_telegram_ids,
+    delete_all_users,
+)
+from models.schedule import delete_all_schedules
 from keyboards.inline.menu import get_admin_menu_markup, are_you_sure_markup
 from states.user_state import AdminState
 from filters.admin import IsBotAdminFilter
-from data.config import ADMINS
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -38,13 +44,13 @@ async def get_all_users(message: types.Message):
 
 
 async def get_all_users_handler(message: types.Message):
-    total = await User.all().count()
+    total = await count_users()
     if total == 0:
         await message.answer("❌ Foydalanuvchilar topilmadi.")
         return
 
     text = f"👥 <b>Barcha foydalanuvchilar: {total}</b>\n\n"
-    users = await User.all().limit(20)
+    users = await get_all_users(limit=20)
     for idx, user in enumerate(users, 1):
         connected = "✅" if user.hemis_login else "❌"
         group = user.group_name or "—"
@@ -68,9 +74,9 @@ async def stats(message: types.Message):
 
 
 async def stats_handler(message: types.Message):
-    total = await User.all().count()
-    connected = await User.filter(hemis_login__not_isnull=True).count()
-    reminders = await User.filter(reminder_enabled=True).count()
+    total = await count_users()
+    connected = await count_connected_users()
+    reminders = await count_reminder_users()
 
     text = f"""
 📊 <b>Bot statistikasi</b>
@@ -99,7 +105,7 @@ async def ask_ad_content(message: types.Message, state: FSMContext):
 async def send_ad_to_users(message: types.Message, state: FSMContext):
     try:
         await message.answer("⏳ Reklama yuborilmoqda...")
-        user_ids = await User.all().values_list('telegram_id', flat=True)
+        user_ids = await get_all_telegram_ids()
         total = len(user_ids)
         success = 0
         failed = 0
@@ -176,9 +182,9 @@ async def ask_are_you_sure(message: types.Message, state: FSMContext):
 async def clean_db(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
     if call.data == 'yes':
-        count = await User.all().count()
-        await User.all().delete()
-        await Schedule.all().delete()
+        count = await count_users()
+        await delete_all_users()
+        await delete_all_schedules()
         await call.message.edit_text(f"✅ Baza tozalandi. O'chirilgan: {count} ta foydalanuvchi")
     else:
         await call.message.edit_text("❌ Amal bekor qilindi.")

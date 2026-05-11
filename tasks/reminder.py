@@ -1,6 +1,5 @@
 from datetime import date, timedelta
-from models.user import User
-from models.schedule import Schedule
+from models.user import get_reminder_users
 
 UZ_DAYS = ["Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba", "Yakshanba"]
 DAY_MAP = {"Monday": "Dushanba", "Tuesday": "Seshanba", "Wednesday": "Chorshanba",
@@ -8,7 +7,7 @@ DAY_MAP = {"Monday": "Dushanba", "Tuesday": "Seshanba", "Wednesday": "Chorshanba
 
 
 async def send_daily_reminders(bot):
-    from services.hemis_service import create_session, check_login_status, fetch_schedule
+    from services.hemis_service import check_login_status, fetch_schedule
     from services.schedule_service import get_cached_week_id
     from services.session_store import user_sessions
     from handlers.users.profile import _hemis_auto_login
@@ -16,7 +15,7 @@ async def send_daily_reminders(bot):
     tomorrow = (date.today() + timedelta(days=1)).strftime("%A")
     tomorrow_uz = DAY_MAP.get(tomorrow, tomorrow)
 
-    users = await User.filter(reminder_enabled=True, hemis_login__not_isnull=True)
+    users = await get_reminder_users()
 
     for user in users:
         tid = user.telegram_id
